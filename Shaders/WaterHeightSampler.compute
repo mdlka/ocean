@@ -1,0 +1,28 @@
+#pragma kernel Sample4Heights
+
+Texture2DArray<float4> _DisplacementsTextures;
+SamplerState sampler_DisplacementsTextures;
+
+StructuredBuffer<float> _Wavelengths;
+uint _NbCascades;
+
+StructuredBuffer<float4> _SamplePositions;
+RWStructuredBuffer<float> _OutHeights;
+
+[numthreads(4,1,1)]
+void Sample4Heights(uint3 tid : SV_DispatchThreadID)
+{
+    uint idx = tid.x;
+    if (idx >= 4) return;
+
+    float2 worldUV = _SamplePositions[idx].xz;
+
+    float height = 0.0;
+    for (uint i = 0; i < _NbCascades; i++)
+    {
+        float2 uv = worldUV / _Wavelengths[i];
+        height += _DisplacementsTextures.SampleLevel(sampler_DisplacementsTextures, float3(uv, i), 0.0).y;
+    }
+
+    _OutHeights[idx] = height;
+}

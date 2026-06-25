@@ -1,0 +1,17 @@
+{
+  "name": "com.yellowsquad.ocean",
+  "version": "1.0.0",
+  "displayName": "Ocean",
+  "unity": "6000.0",
+  "description": "Realistic ocean.",
+  "author": "mdlka",
+  "samples": [
+      {
+        "displayName": "Draft",
+        "path": "Samples~/Draft"
+      }
+    ],
+  "dependencies": {
+    "com.unity.render-pipelines.universal": "17.0.4"
+  }
+}

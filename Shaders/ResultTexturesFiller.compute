@@ -1,0 +1,32 @@
+#pragma kernel FillResultTextures
+
+uint _NbCascades;
+
+RWTexture2DArray<float3> _DisplacementsTextures;
+RWTexture2DArray<float4> _DerivativesTextures;
+RWTexture2DArray<float4> _TurbulenceTextures;
+
+RWTexture2DArray<float2> _DxDzTextures;
+RWTexture2DArray<float2> _DyDxzTextures;
+RWTexture2DArray<float2> _DyxDyzTextures;
+RWTexture2DArray<float2> _DxxDzzTextures;
+
+[numthreads(8,8,1)]
+void FillResultTextures(uint3 id : SV_DispatchThreadID)
+{
+    for (uint i = 0; i < _NbCascades; ++i)
+    {
+        float2 DxDz = _DxDzTextures[uint3(id.xy, i)];
+        float2 DyDxz = _DyDxzTextures[uint3(id.xy, i)];
+        float2 DyxDyz = _DyxDyzTextures[uint3(id.xy, i)];
+        float2 DxxDzz = _DxxDzzTextures[uint3(id.xy, i)];
+
+        _DisplacementsTextures[uint3(id.xy, i)] = float3(DxDz.x, DyDxz.x, DxDz.y);
+        _DerivativesTextures[uint3(id.xy, i)] = float4(DyxDyz, DxxDzz);
+
+        float jacobian = (1 + DxxDzz.x) * (1 + DxxDzz.y) - DyDxz.y * DyDxz.y;
+        float foam = _TurbulenceTextures[uint3(id.xy, i)].x * exp(-2.0);
+        if (foam < jacobian) foam += jacobian;
+        _TurbulenceTextures[uint3(id.xy, i)] = foam;
+    }
+}

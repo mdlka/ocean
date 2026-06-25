@@ -1,0 +1,135 @@
+#pragma kernel CalculateInitialSpectrumTextures
+#pragma kernel CalculateConjugatedInitialSpectrumTextures
+
+static const float PI = 3.14159265;
+
+uint _NbCascades;
+uint _TextureSize;
+
+Texture2D<float2> _RandomNoiseTexture;
+RWTexture2DArray<float4> _InitialSpectrumTextures;
+RWTexture2DArray<float4> _WavesDataTextures;
+StructuredBuffer<float> _Wavelengths;
+StructuredBuffer<float> _Cutoffs;
+StructuredBuffer<float> _Fades;
+StructuredBuffer<float> _Swells;
+
+float _WindSpeed;
+float _WindDirectionX;
+float _WindDirectionY;
+float _Gravity;
+float _Fetch;
+float _Depth;
+
+float AngularFrequency(float k)
+{
+    return sqrt(_Gravity * k);
+}
+
+float TMACorrection(float angularFrequency)
+{
+    float angularFrequencyH = angularFrequency * sqrt(_Depth / _Gravity);
+    if (angularFrequencyH <= 1.0f) return 0.5f * angularFrequencyH * angularFrequencyH;
+    if (angularFrequencyH < 2.0f) return 1.0f - 0.5f * (2.0f - angularFrequencyH) * (2.0f - angularFrequencyH);
+    return 1.0f;
+}
+
+float JONSWAP(float angularFrequency, float peakAngularFrequency)
+{
+    float alpha = 0.076f * pow(abs(_WindSpeed * _WindSpeed / (_Fetch * _Gravity)), 0.22f);
+    float gamma = 3.3f;
+    float sigma = angularFrequency <= peakAngularFrequency ? 0.07f : 0.09f;
+
+    float frequencyMinusPeakFrequency = angularFrequency - peakAngularFrequency;
+    float r = exp(-(frequencyMinusPeakFrequency * frequencyMinusPeakFrequency) / (2 * sigma * sigma * peakAngularFrequency * peakAngularFrequency));
+
+    return alpha * _Gravity * _Gravity / pow(angularFrequency, 5) * exp(-1.25 * pow(peakAngularFrequency / angularFrequency, 4)) * pow(abs(gamma), r);
+}
+
+float SpreadPower(float angularFrequency, float peakAngularFrequency)
+{
+    if (angularFrequency < 1.05 * peakAngularFrequency) return 6.97 * pow(abs(angularFrequency / peakAngularFrequency), 4.06);
+
+    float peakSpeed = _Gravity / peakAngularFrequency;
+    float mu = -2.33 - 1.45 * (_WindSpeed / peakSpeed - 1.17);
+    return 9.77 * pow(abs(angularFrequency / peakAngularFrequency), mu);
+}
+
+float NormalizationFactor(float s)
+{
+    float s2 = s * s;
+    float s3 = s2 * s;
+    if (s <= 0.4f) return 0.09f * s3 + (pow(log(2), 2) / PI - PI / 12.0f) * s2 + log(2) / PI * s + 1 / (2 * PI);
+    return sqrt(s) / (2.0f * sqrt(PI)) + 1 / (16.0f * sqrt(PI * s));
+}
+
+float DirectionalSpread(float angularFrequency, float peakAngularFrequency, float theta, float swell)
+{
+    float s = SpreadPower(angularFrequency, peakAngularFrequency) + 16 * tanh(angularFrequency / peakAngularFrequency) * swell * swell;
+    float2 normalizedWindDirection = normalize(float2(_WindDirectionX, _WindDirectionY));
+    float windTheta = atan2(normalizedWindDirection.y, normalizedWindDirection.x);
+
+    return NormalizationFactor(s) * pow(abs(cos(0.5f * (theta - windTheta))), 2.0f * s);
+}
+
+float FrequencyDerivative(float k, float angularFrequency)
+{
+    float th = tanh(min(k * _Depth, 20));
+    float ch = cosh(k * _Depth);
+    return _Gravity * (_Depth * k / ch / ch + th) / (angularFrequency * 2);
+}
+
+float ShortWavesFade(float k, float fade)
+{
+    return exp(-fade * fade * k * k);
+}
+
+[numthreads(8,8,1)]
+void CalculateInitialSpectrumTextures(uint3 id : SV_DispatchThreadID)
+{
+    uint halfSize = _TextureSize / 2;
+    int nx = id.x - halfSize;
+    int nz = id.y - halfSize;
+    float gaussianRandomNumber1 = _RandomNoiseTexture[id.xy].x;
+    float gaussianRandomNumber2 = _RandomNoiseTexture[id.xy].y;
+
+    for (uint i = 0; i < _NbCascades; ++i)
+    {
+        float k = 2.0f * PI / _Wavelengths[i];
+        float2 kVector = float2(nx, nz) * k;
+        float kMagnitude = length(kVector);
+
+        if (kMagnitude >= _Cutoffs[i * 2] && kMagnitude <= _Cutoffs[i * 2 + 1])
+        {
+            float kAngle = atan2(kVector.y, kVector.x);
+            float angularFrequency = AngularFrequency(kMagnitude);
+            float peakAngularFrequency = 22 * pow(abs(_Gravity * _Gravity / (_WindSpeed * _Fetch)), 0.3333f);
+
+            _InitialSpectrumTextures[uint3(id.xy, i)] = float4(float2(gaussianRandomNumber1, gaussianRandomNumber2) / 2.0f
+                * sqrt(2.0f * TMACorrection(angularFrequency)
+                * JONSWAP(angularFrequency, peakAngularFrequency)
+                * DirectionalSpread(angularFrequency, peakAngularFrequency, kAngle, _Swells[i])
+                * ShortWavesFade(kMagnitude, _Fades[i])
+                * FrequencyDerivative(kMagnitude, angularFrequency) / kMagnitude * k * k), 0.0f, 0.0f);
+
+            _WavesDataTextures[uint3(id.xy, i)] = float4(kVector.x, 1 / kMagnitude, kVector.y, angularFrequency);
+        }
+        else
+        {
+            _InitialSpectrumTextures[uint3(id.xy, i)] = 0;
+            _WavesDataTextures[uint3(id.xy, i)] = float4(kVector.x, 1, kVector.y, 0);
+        }
+    }
+}
+
+[numthreads(8,8,1)]
+void CalculateConjugatedInitialSpectrumTextures(uint3 id : SV_DispatchThreadID)
+{
+    for (uint i = 0; i < _NbCascades; ++i)
+    {
+        float2 H0K = _InitialSpectrumTextures[uint3(id.xy, i)].xy;
+        uint2 complexConjugateIndex = uint2((_TextureSize - id.x) % _TextureSize, (_TextureSize - id.y) % _TextureSize);
+        float2 H0MinusK = _InitialSpectrumTextures[uint3(complexConjugateIndex, i)].xy;
+        _InitialSpectrumTextures[uint3(id.xy, i)] = float4(H0K.x, H0K.y, H0MinusK.x, -H0MinusK.y);
+    }
+}

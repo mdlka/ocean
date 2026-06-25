@@ -1,0 +1,14 @@
+{
+    "name": "YellowSquad.OceanLib",
+    "rootNamespace": "YellowSquad.OceanLib",
+    "references": [],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
